@@ -49,8 +49,25 @@ const BACKSPACE_ALT = '\b';
 const CTRL_C = '\u0003';
 const CTRL_D = '\u0004';
 
+/** Readline's unix-line-discard: throw the whole line away and start again. */
+const CTRL_U = '\u0015';
+const ESC = '\u001b';
 /** Erase the last echoed character: back up, overwrite with a space, back up. */
 const ERASE = '\b \b';
+
+/**
+ * True for C0 control characters and DEL.
+ *
+ * None of them belong in a credential, and appending one silently would corrupt
+ * the secret with a character the user cannot see.
+ */
+function isControl(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0;
+  return code < 0x20 || code === 0x7f;
+}
+
+/** Progress through an ANSI escape sequence, which has to be swallowed whole. */
+type EscapeState = 'none' | 'introduced' | 'sequence';
 
 /**
  * Ask the user for a credential on the terminal.
@@ -104,6 +121,8 @@ function read(
     // Per call, not shared: a streaming decoder carries state across chunks so
     // a multi-byte character split between two reads still decodes correctly.
     const decoder = new TextDecoder();
+    // Also spans chunks: a terminal can deliver an escape sequence in pieces.
+    let escape: EscapeState = 'none';
 
     const finish = (outcome: () => void): void => {
       input.off('data', onData);
@@ -120,7 +139,36 @@ function read(
           : decoder.decode(chunk, { stream: true });
 
       for (const character of text) {
+        // An escape sequence carries no credential characters, so consume it
+        // whole rather than letting its printable bytes reach the value. An
+        // arrow key is ESC [ A; without this the secret would gain "[A".
+        if (escape === 'introduced') {
+          // ESC [ and ESC O introduce a longer sequence; anything else is a
+          // two-character escape that ends here.
+          escape = character === '[' || character === 'O' ? 'sequence' : 'none';
+          continue;
+        }
+        if (escape === 'sequence') {
+          const code = character.codePointAt(0) ?? 0;
+          // Parameters and intermediates come first; the final byte is 0x40-0x7e.
+          if (code >= 0x40 && code <= 0x7e) {
+            escape = 'none';
+          }
+          continue;
+        }
+
         switch (character) {
+          case ESC: {
+            escape = 'introduced';
+            break;
+          }
+          case CTRL_U: {
+            if (mask !== false) {
+              output.write(ERASE.repeat(value.length));
+            }
+            value = '';
+            break;
+          }
           case ENTER:
           case NEWLINE:
           case CTRL_D: {
@@ -146,6 +194,12 @@ function read(
             break;
           }
           default: {
+            // Anything else that is a control character — cursor motion,
+            // redraw, whatever the terminal sent — is dropped rather than
+            // appended, so it cannot end up invisibly inside the credential.
+            if (isControl(character)) {
+              break;
+            }
             value += character;
             if (mask !== false) {
               output.write(mask);

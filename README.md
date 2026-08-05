@@ -158,8 +158,23 @@ both a developer's terminal and a deployed process. Options:
 | `input` | `process.stdin` | Where keystrokes come from. |
 | `output` | `process.stderr` | Where the prompt is written. |
 
-Backspace works. Ctrl-C **halts the chain** rather than falling through: an
-explicit refusal should not quietly fall back to some other credential source.
+Editing keys behave the way muscle memory from readline expects:
+
+| Key | Effect |
+| --- | --- |
+| Backspace / Ctrl-H | delete the last character |
+| Ctrl-U | discard the whole line and start again |
+| Enter, Ctrl-D | submit |
+| Ctrl-C | **halt the chain** |
+
+Ctrl-C halts rather than falling through: an explicit refusal should not quietly
+fall back to some other credential source.
+
+Every other control character is **dropped**, and ANSI escape sequences are
+swallowed whole. Cursor keys, Home, End and function keys are meaningless when
+nothing is rendered, and the alternative is worse than useless — an arrow key
+sends `ESC [ A`, so appending what arrives would silently bury `[A` inside the
+credential where nobody can see it.
 
 ### `fromStatic<T>(value: T): Provider<T>`
 

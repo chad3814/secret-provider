@@ -233,3 +233,121 @@ test('prompts at resolution, not at construction', () => {
   assert.equal(output.written, '', 'constructing must not touch the terminal');
   assert.deepEqual(input.rawModeCalls, []);
 });
+
+const CTRL_A = '\u0001';
+const CTRL_E = '\u0005';
+const CTRL_L = '\u000c';
+const CTRL_U = '\u0015';
+const ESC = '\u001b';
+
+test('Ctrl-U discards everything typed so far', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type('wr0ng-t9ped', CTRL_U, 's3cret', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
+
+test('Ctrl-U on empty input is a no-op', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type(CTRL_U, CTRL_U, 's3cret', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
+
+test('Ctrl-U then Enter submits empty, so it falls through', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type('typo', CTRL_U, '\r');
+
+  await assert.rejects(pending, (error) => {
+    assert.ok(error instanceof ProviderError);
+    assert.equal(error.tryNextLink, true);
+    assert.match(error.message, /empty/);
+    return true;
+  });
+});
+
+test('Ctrl-U erases the echoed placeholders when masking', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output, mask: '*' })();
+  input.type('abcdef', CTRL_U, 'xy', '\r');
+  await pending;
+
+  const eraseSeq = String.fromCharCode(8) + " " + String.fromCharCode(8);
+  const erases = output.written.split(eraseSeq).length - 1;
+  assert.equal(erases, 6, 'one erase per discarded placeholder');
+});
+
+test('does not count Ctrl-U as a keystroke to mask', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output, mask: '*' })();
+  input.type('abc', CTRL_U, 'xy', '\r');
+  await pending;
+
+  // 3 for 'abc', then 2 for 'xy' — nothing for the Ctrl-U itself.
+  assert.equal((output.written.match(/\*/g) ?? []).length, 5);
+  assert.equal(output.written.includes(CTRL_U), false);
+});
+
+test('ignores control characters instead of putting them in the secret', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  // Cursor motion and redraw keys are meaningless with nothing rendered.
+  input.type('s3', CTRL_A, 'c', CTRL_E, 'r', CTRL_L, 'et', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
+
+test('ignores arrow keys rather than injecting their escape sequence', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type('s3c', `${ESC}[A`, `${ESC}[D`, 'ret', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
+
+test('ignores Home and End style escape sequences', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type('s3c', `${ESC}OH`, `${ESC}[F`, 'ret', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
+
+test('ignores a multi-character function key sequence', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type('s3c', `${ESC}[15~`, 'ret', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
+
+test('ignores an escape sequence split across chunks', async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+
+  const pending = fromPrompt('API key: ', { input, output })();
+  input.type('s3c', ESC, '[', 'A', 'ret', '\r');
+
+  assert.equal(await pending, 's3cret');
+});
