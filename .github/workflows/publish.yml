@@ -1,0 +1,71 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for npm trusted publishing (OIDC). npm exchanges this token for a
+  # short-lived credential, so no NPM_TOKEN secret is stored anywhere.
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 ships a new enough npm
+      # today, but pinning the floor here keeps this from silently regressing if
+      # the bundled version ever moves backwards.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # A release tag and package.json that disagree would publish a version
+      # nobody can correlate back to a tag. Read via env rather than direct
+      # interpolation so the tag cannot be injected into the shell.
+      - name: Check package.json version matches the release tag
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "::error::release tag $RELEASE_TAG does not match package.json version $version (expected v$version)"
+            exit 1
+          fi
+          echo "release tag $RELEASE_TAG matches package.json v$version"
+
+      - name: Show what will ship
+        run: npm pack --dry-run
+
+      # No --provenance flag: npm generates provenance automatically when
+      # publishing via OIDC from a public repository.
+      - name: Publish
+        run: npm publish
