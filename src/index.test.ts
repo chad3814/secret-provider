@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
   chain,
   fromEnv,
+  fromFile,
   fromStatic,
   memoize,
   ProviderError,
@@ -54,6 +58,33 @@ test('falls past an empty environment variable to the next link', async (t) => {
   );
 
   assert.equal(await apiKey(), 'from-fallback');
+});
+
+test('prefers the environment, then a file, then a static fallback', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'secret-provider-index-'));
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+    delete process.env.SECRET_PROVIDER_TEST_API_KEY;
+  });
+  const path = join(dir, 'api_key');
+
+  const apiKey = () =>
+    memoize(
+      chain(
+        fromEnv('SECRET_PROVIDER_TEST_API_KEY'),
+        fromFile(path),
+        fromStatic('from-static'),
+      ),
+    );
+
+  delete process.env.SECRET_PROVIDER_TEST_API_KEY;
+  assert.equal(await apiKey()(), 'from-static', 'nothing set yet');
+
+  await writeFile(path, 'from-file\n');
+  assert.equal(await apiKey()(), 'from-file', 'file beats the static fallback');
+
+  process.env.SECRET_PROVIDER_TEST_API_KEY = 'from-env';
+  assert.equal(await apiKey()(), 'from-env', 'the environment wins outright');
 });
 
 test('surfaces ProviderError so callers can distinguish a halted chain', async () => {
