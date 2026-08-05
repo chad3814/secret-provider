@@ -84,7 +84,7 @@ throw in a custom provider falls through. When every link fails, `chain` throws
 with all the failure messages aggregated, so you can see each source that was
 tried and why it didn't answer:
 
-```
+```text
 no provider resolved a value (POSTFUL_API_KEY not set; /run/secrets/api_key does not exist)
 ```
 
@@ -108,6 +108,7 @@ const token = memoize(fetchToken, (t) => t.expiresAt < Date.now());
 ```
 
 ### `fromEnv(name: string): Provider<string>`
+
 ### `fromEnv<T>(read: (env: Environment) => T | undefined, label: string): Provider<T>`
 
 Reads the process environment on every resolution, so a variable set later is
