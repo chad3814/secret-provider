@@ -146,11 +146,83 @@ confusing downstream auth failure.
 | `fromFile` — file empty or whitespace-only | falls through |
 | `fromFile` — no permission, is a directory, bad path prefix | **halts the chain** |
 
+## Accepting a provider in your own library
+
+If you are writing a client or library that needs a credential, take a provider
+rather than a resolved string. The caller then decides where the secret comes
+from — env, file, vault, `op read` — and you stop forcing them to have it in
+hand before they can construct your object.
+
+**You do not need to depend on this package to accept one.** `Provider<T>` is
+structurally just a function, so declaring it inline is enough, and your users
+can pass anything of that shape whether or not they use this library:
+
+```ts
+type Provider<T> = () => Promise<T>;
+
+export interface PostfulClientOptions {
+  /** An API key, or anything that resolves one. A string is used as-is. */
+  apiKey: string | Provider<string>;
+}
+```
+
+Normalise once at the boundary, then resolve at each point of use:
+
+```ts
+import { fromStatic, memoize, type Provider } from '@chad3814/secret-provider';
+
+export class PostfulClient {
+  readonly #apiKey: Provider<string>;
+
+  constructor(options: PostfulClientOptions) {
+    this.#apiKey = memoize(
+      typeof options.apiKey === 'string'
+        ? fromStatic(options.apiKey)
+        : options.apiKey,
+    );
+  }
+
+  async send(body: string): Promise<Response> {
+    // Resolved per request, so a rotated credential is picked up without
+    // rebuilding the client.
+    const apiKey = await this.#apiKey();
+
+    return fetch('https://api.postful.ai/send', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}` },
+      body,
+    });
+  }
+}
+```
+
+A few things worth getting right:
+
+- **Resolve at use, not in the constructor.** Resolving once up front makes
+  construction async and freezes the credential for the object's lifetime, so
+  expiry and rotation never take effect.
+- **Take `() => Promise<T>`, not `Promise<T>`.** A promise resolves once,
+  eagerly, and cannot be re-resolved after expiry or retried after a failure.
+  The thunk is what makes those possible.
+- **Call `memoize` yourself, once.** Then resolving per request costs nothing,
+  and a caller who forgot to memoize does not get a vault round-trip per call.
+  Pass `isExpired` through if your credential has a lifetime.
+- **Let `ProviderError` propagate.** Catching it and rethrowing something
+  generic destroys both the `tryNextLink` distinction and the aggregated list of
+  sources that were tried — which is the part that makes a misconfiguration
+  diagnosable.
+- **Keep the resolved value local.** Don't log it, don't put it in an error
+  message, don't attach it to anything that gets serialised. It should live in
+  the closure and the outbound request, nowhere else.
+
 ## Types
 
 `Environment` is a structural `Readonly<Record<string, string | undefined>>`
 rather than `NodeJS.ProcessEnv`, so you don't need `@types/node` installed to
 typecheck against this package.
+
+`Provider<T>` is exported as a type for convenience, but as above it is only
+`() => Promise<T>` — nothing stops a consumer from satisfying it structurally.
 
 ## License
 
