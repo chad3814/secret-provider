@@ -31,7 +31,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test \"src/**/*.test.ts\"",
     "lint": "eslint .",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "tag": "git tag -s \"v$npm_package_version\" -m \"v$npm_package_version\""
   },
   "keywords": [
     "credentials",
