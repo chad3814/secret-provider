@@ -128,6 +128,43 @@ Reads a credential from disk — a Docker or Kubernetes secret mount, a
 final newline yields the credential rather than one with a stray `\n`. Interior
 newlines are preserved, so a multi-line PEM key survives intact.
 
+### `fromIni(path: string, key: string, options?: IniOptions): Provider<string>`
+
+Reads one key out of one section of an ini-style file — the shape of
+`~/.aws/credentials` and its many imitators, where each `[section]` is a named
+profile.
+
+```ts
+const apiKey = fromIni('~/.postful/credentials', 'api_key', {
+  profile: 'staging',
+});
+```
+
+```ini
+[default]
+api_key = dev-key
+
+[staging]
+api_key = "staging-key"
+```
+
+`profile` defaults to `'default'`. A leading `~` is expanded, which a shell would
+have done for you but a Node process will not.
+
+Parsing is deliberately small and dependency-free, with a few rules worth
+knowing:
+
+- Section and key lookups are **case-sensitive**.
+- Where a key is assigned more than once, the **last wins**.
+- The value is split on the **first `=` only**, so a base64 value keeps its
+  padding.
+- Surrounding quotes are stripped, since people quote out of habit and a
+  credential carrying literal quote marks fails in a way that is hard to spot.
+- `#` and `;` start a comment **only at the beginning of a line**. Truncating at
+  a mid-value `#` would silently mangle a credential that contains one.
+- Lines that are neither a section header nor an assignment are ignored, rather
+  than failing a lookup that would otherwise have succeeded.
+
 ### `fromPrompt(prompt: string, options?: PromptOptions): Provider<string>`
 
 Asks the person at the keyboard. Reads from the terminal with echo suppressed,
@@ -194,6 +231,10 @@ confusing downstream auth failure.
 | `fromFile` — path does not exist | falls through |
 | `fromFile` — file empty or whitespace-only | falls through |
 | `fromFile` — no permission, is a directory, bad path prefix | **halts the chain** |
+| `fromIni` — path does not exist | falls through |
+| `fromIni` — profile or key absent | falls through |
+| `fromIni` — value empty, or empty quotes | falls through |
+| `fromIni` — no permission, is a directory, bad path prefix | **halts the chain** |
 | `fromPrompt` — no TTY to prompt on | falls through |
 | `fromPrompt` — submitted empty | falls through |
 | `fromPrompt` — cancelled with Ctrl-C | **halts the chain** |
