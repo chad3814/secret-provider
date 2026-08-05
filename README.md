@@ -128,6 +128,39 @@ Reads a credential from disk — a Docker or Kubernetes secret mount, a
 final newline yields the credential rather than one with a stray `\n`. Interior
 newlines are preserved, so a multi-line PEM key survives intact.
 
+### `fromPrompt(prompt: string, options?: PromptOptions): Provider<string>`
+
+Asks the person at the keyboard. Reads from the terminal with echo suppressed,
+so nothing typed is displayed — not even its length. The prompt is written to
+**stderr**, the convention for password prompts, so a CLI's stdout stays clean
+for piping.
+
+```ts
+const apiKey = memoize(
+  chain(
+    fromEnv('POSTFUL_API_KEY'),
+    fromFile('/run/secrets/postful_api_key'),
+    fromPrompt('Postful API key: '),
+  ),
+);
+```
+
+`memoize` matters more here than anywhere else: without it, every resolution
+asks again.
+
+Because there is nothing to prompt *on* in CI, behind a pipe, or in a daemon, a
+missing TTY simply falls through to the next link — so the same chain works in
+both a developer's terminal and a deployed process. Options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `mask` | `false` | `false` echoes nothing at all. A character such as `'*'` echoes one per keystroke, at the cost of revealing the length. |
+| `input` | `process.stdin` | Where keystrokes come from. |
+| `output` | `process.stderr` | Where the prompt is written. |
+
+Backspace works. Ctrl-C **halts the chain** rather than falling through: an
+explicit refusal should not quietly fall back to some other credential source.
+
 ### `fromStatic<T>(value: T): Provider<T>`
 
 Wraps an already-known value. Useful as an explicit last link, and for
@@ -135,7 +168,7 @@ supplying a credential in tests.
 
 ## When a source counts as absent
 
-Both built-in readers treat a present-but-empty value as absent, on the grounds
+The built-in providers treat a present-but-empty value as absent, on the grounds
 that an empty credential is a misconfiguration and would otherwise surface as a
 confusing downstream auth failure.
 
@@ -146,6 +179,9 @@ confusing downstream auth failure.
 | `fromFile` — path does not exist | falls through |
 | `fromFile` — file empty or whitespace-only | falls through |
 | `fromFile` — no permission, is a directory, bad path prefix | **halts the chain** |
+| `fromPrompt` — no TTY to prompt on | falls through |
+| `fromPrompt` — submitted empty | falls through |
+| `fromPrompt` — cancelled with Ctrl-C | **halts the chain** |
 
 ## Accepting a provider in your own library
 
@@ -224,6 +260,10 @@ typecheck against this package.
 
 `Provider<T>` is exported as a type for convenience, but as above it is only
 `() => Promise<T>` — nothing stops a consumer from satisfying it structurally.
+
+`PromptInput` and `PromptOutput` are likewise structural, describing only the
+handful of members `fromPrompt` touches. `process.stdin` and `process.stderr`
+satisfy them without a cast, and so does a test double.
 
 ## License
 

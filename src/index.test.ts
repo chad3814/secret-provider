@@ -8,6 +8,7 @@ import {
   chain,
   fromEnv,
   fromFile,
+  fromPrompt,
   fromStatic,
   memoize,
   ProviderError,
@@ -97,4 +98,19 @@ test('surfaces ProviderError so callers can distinguish a halted chain', async (
     assert.equal(error.tryNextLink, false);
     return true;
   });
+});
+
+test('exposes fromPrompt as a chain link that falls through without a TTY', async () => {
+  const notATty = {
+    isTTY: false,
+    on: () => undefined,
+    off: () => undefined,
+  };
+
+  const apiKey = chain(
+    fromPrompt('API key: ', { input: notATty }),
+    fromStatic('from-static'),
+  );
+
+  assert.equal(await apiKey(), 'from-static');
 });
