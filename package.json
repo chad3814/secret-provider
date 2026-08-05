@@ -1,0 +1,48 @@
+{
+  "name": "@chad3814/secret-provider",
+  "version": "0.1.0",
+  "description": "Composable async credential providers — a first-to-resolve chain with memoization, in the shape of the AWS SDK's provider pattern, for any secret source.",
+  "license": "MIT",
+  "author": "Chad Walker",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chad3814/secret-provider.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "lint": "eslint .",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "keywords": [
+    "credentials",
+    "secrets",
+    "provider",
+    "chain",
+    "config"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^22.20.1",
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4"
+  }
+}
