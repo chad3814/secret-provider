@@ -8,6 +8,8 @@ import {
   chain,
   fromEnv,
   fromFile,
+  fromIni,
+  fromPrompt,
   fromStatic,
   memoize,
   ProviderError,
@@ -97,4 +99,51 @@ test('surfaces ProviderError so callers can distinguish a halted chain', async (
     assert.equal(error.tryNextLink, false);
     return true;
   });
+});
+
+test('exposes fromPrompt as a chain link that falls through without a TTY', async () => {
+  const notATty = {
+    isTTY: false,
+    on: () => undefined,
+    off: () => undefined,
+  };
+
+  const apiKey = chain(
+    fromPrompt('API key: ', { input: notATty }),
+    fromStatic('from-static'),
+  );
+
+  assert.equal(await apiKey(), 'from-static');
+});
+
+test('exposes fromIni as a chain link, preferring it over a static fallback', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'secret-provider-index-ini-'));
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const path = join(dir, 'credentials');
+  await writeFile(path, '[staging]\napi_key = from-ini\n');
+
+  const apiKey = chain(
+    fromIni(path, 'api_key', { profile: 'staging' }),
+    fromStatic('from-static'),
+  );
+
+  assert.equal(await apiKey(), 'from-ini');
+});
+
+test('falls past an ini file that lacks the profile', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'secret-provider-index-ini2-'));
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const path = join(dir, 'credentials');
+  await writeFile(path, '[production]\napi_key = wrong\n');
+
+  const apiKey = chain(
+    fromIni(path, 'api_key', { profile: 'staging' }),
+    fromStatic('from-static'),
+  );
+
+  assert.equal(await apiKey(), 'from-static');
 });

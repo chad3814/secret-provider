@@ -128,6 +128,91 @@ Reads a credential from disk — a Docker or Kubernetes secret mount, a
 final newline yields the credential rather than one with a stray `\n`. Interior
 newlines are preserved, so a multi-line PEM key survives intact.
 
+### `fromIni(path: string, key: string, options?: IniOptions): Provider<string>`
+
+Reads one key out of one section of an ini-style file — the shape of
+`~/.aws/credentials` and its many imitators, where each `[section]` is a named
+profile.
+
+```ts
+const apiKey = fromIni('~/.postful/credentials', 'api_key', {
+  profile: 'staging',
+});
+```
+
+```ini
+[default]
+api_key = dev-key
+
+[staging]
+api_key = "staging-key"
+```
+
+`profile` defaults to `'default'`. A leading `~` is expanded, which a shell would
+have done for you but a Node process will not.
+
+Parsing is deliberately small and dependency-free, with a few rules worth
+knowing:
+
+- Section and key lookups are **case-sensitive**.
+- Where a key is assigned more than once, the **last wins**.
+- The value is split on the **first `=` only**, so a base64 value keeps its
+  padding.
+- Surrounding quotes are stripped, since people quote out of habit and a
+  credential carrying literal quote marks fails in a way that is hard to spot.
+- `#` and `;` start a comment **only at the beginning of a line**. Truncating at
+  a mid-value `#` would silently mangle a credential that contains one.
+- Lines that are neither a section header nor an assignment are ignored, rather
+  than failing a lookup that would otherwise have succeeded.
+
+### `fromPrompt(prompt: string, options?: PromptOptions): Provider<string>`
+
+Asks the person at the keyboard. Reads from the terminal with echo suppressed,
+so nothing typed is displayed — not even its length. The prompt is written to
+**stderr**, the convention for password prompts, so a CLI's stdout stays clean
+for piping.
+
+```ts
+const apiKey = memoize(
+  chain(
+    fromEnv('POSTFUL_API_KEY'),
+    fromFile('/run/secrets/postful_api_key'),
+    fromPrompt('Postful API key: '),
+  ),
+);
+```
+
+`memoize` matters more here than anywhere else: without it, every resolution
+asks again.
+
+Because there is nothing to prompt *on* in CI, behind a pipe, or in a daemon, a
+missing TTY simply falls through to the next link — so the same chain works in
+both a developer's terminal and a deployed process. Options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `mask` | `false` | `false` echoes nothing at all. A character such as `'*'` echoes one per keystroke, at the cost of revealing the length. |
+| `input` | `process.stdin` | Where keystrokes come from. |
+| `output` | `process.stderr` | Where the prompt is written. |
+
+Editing keys behave the way muscle memory from readline expects:
+
+| Key | Effect |
+| --- | --- |
+| Backspace / Ctrl-H | delete the last character |
+| Ctrl-U | discard the whole line and start again |
+| Enter, Ctrl-D | submit |
+| Ctrl-C | **halt the chain** |
+
+Ctrl-C halts rather than falling through: an explicit refusal should not quietly
+fall back to some other credential source.
+
+Every other control character is **dropped**, and ANSI escape sequences are
+swallowed whole. Cursor keys, Home, End and function keys are meaningless when
+nothing is rendered, and the alternative is worse than useless — an arrow key
+sends `ESC [ A`, so appending what arrives would silently bury `[A` inside the
+credential where nobody can see it.
+
 ### `fromStatic<T>(value: T): Provider<T>`
 
 Wraps an already-known value. Useful as an explicit last link, and for
@@ -135,7 +220,7 @@ supplying a credential in tests.
 
 ## When a source counts as absent
 
-Both built-in readers treat a present-but-empty value as absent, on the grounds
+The built-in providers treat a present-but-empty value as absent, on the grounds
 that an empty credential is a misconfiguration and would otherwise surface as a
 confusing downstream auth failure.
 
@@ -146,6 +231,13 @@ confusing downstream auth failure.
 | `fromFile` — path does not exist | falls through |
 | `fromFile` — file empty or whitespace-only | falls through |
 | `fromFile` — no permission, is a directory, bad path prefix | **halts the chain** |
+| `fromIni` — path does not exist | falls through |
+| `fromIni` — profile or key absent | falls through |
+| `fromIni` — value empty, or empty quotes | falls through |
+| `fromIni` — no permission, is a directory, bad path prefix | **halts the chain** |
+| `fromPrompt` — no TTY to prompt on | falls through |
+| `fromPrompt` — submitted empty | falls through |
+| `fromPrompt` — cancelled with Ctrl-C | **halts the chain** |
 
 ## Accepting a provider in your own library
 
@@ -224,6 +316,10 @@ typecheck against this package.
 
 `Provider<T>` is exported as a type for convenience, but as above it is only
 `() => Promise<T>` — nothing stops a consumer from satisfying it structurally.
+
+`PromptInput` and `PromptOutput` are likewise structural, describing only the
+handful of members `fromPrompt` touches. `process.stdin` and `process.stderr`
+satisfy them without a cast, and so does a test double.
 
 ## License
 
