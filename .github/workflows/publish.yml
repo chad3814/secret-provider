@@ -1,0 +1,119 @@
+# The filename matters: the npm trusted publisher is bound to
+# chad3814/secret-provider/publish.yml. Renaming this file breaks OIDC auth
+# until the trusted publisher is reconfigured to match.
+name: Stage publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required for npm trusted publishing (OIDC). npm exchanges this token for a
+  # short-lived credential, so no NPM_TOKEN secret is stored anywhere.
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    name: stage a publish to npm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # `npm stage publish` needs npm >= 11.15.0. Assert it rather than trust
+      # whatever Node bundles, so a regression fails here with a clear message
+      # instead of an obscure "unknown command" later.
+      - name: Ensure npm supports staged publishing
+        run: |
+          npm install -g npm@latest
+          installed="$(npm --version)"
+          echo "npm $installed"
+          node - "$installed" 11.15.0 <<'EOF'
+          // argv[1] is '-' when the script is read from stdin, so real args start at 2.
+          const [have, want] = process.argv.slice(2);
+          const parts = (v) => v.split('.').map(Number);
+          const [h, w] = [parts(have), parts(want)];
+          for (let i = 0; i < 3; i += 1) {
+            const a = h[i] ?? 0;
+            const b = w[i] ?? 0;
+            if (a > b) break;
+            if (a < b) {
+              console.error(`::error::npm ${have} is older than the required ${want} for 'npm stage publish'`);
+              process.exit(1);
+            }
+          }
+          EOF
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # A release tag and package.json that disagree would stage a version
+      # nobody can correlate back to a tag. Read via env rather than direct
+      # interpolation so the tag cannot be injected into the shell.
+      - name: Check package.json version matches the release tag
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "::error::release tag $RELEASE_TAG does not match package.json version $version (expected v$version)"
+            exit 1
+          fi
+          echo "release tag $RELEASE_TAG matches package.json v$version"
+
+      - name: Show what will ship
+        run: npm pack --dry-run
+
+      # The trusted publisher is configured to allow staging only, so this
+      # uploads the tarball to the stage queue rather than releasing it. It does
+      # not become installable until a maintainer approves it with a 2FA
+      # challenge, which OIDC deliberately cannot do.
+      #
+      # --provenance is passed explicitly: the flag defaults to false, and while
+      # trusted publishing enables provenance on its own, being explicit means
+      # the attestation does not quietly depend on that default.
+      - name: Stage the publish
+        run: npm stage publish --provenance
+
+      - name: Explain how to approve
+        if: success()
+        env:
+          VERSION_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          {
+            echo '### Staged, awaiting approval'
+            echo
+            echo "\`@chad3814/secret-provider\` ${VERSION_TAG:-(manual run)} is in the stage queue."
+            echo 'It is **not installable** until approved with a 2FA challenge.'
+            echo
+            echo 'From a terminal:'
+            echo
+            echo '```sh'
+            echo 'npm stage list'
+            echo 'npm stage download <stage-id>   # optional: inspect the tarball'
+            echo 'npm stage approve <stage-id>    # prompts for 2FA'
+            echo '```'
+            echo
+            echo 'Or approve it on npmjs.com. Approval cannot be automated:'
+            echo 'it requires proof of presence, which is the point.'
+          } >> "$GITHUB_STEP_SUMMARY"
